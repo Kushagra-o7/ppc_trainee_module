@@ -1,51 +1,61 @@
 import numpy as np
 
-def stanley_steering(x, y, yaw, v, waypoints, k=1.0, ks=1e-2, max_steer=np.radians(30)):
-    """
-    Stanley steering controller.
+def normalize_angle(angle):
+    """Normalize angle to [-pi, pi]."""
+    while angle > np.pi:
+        angle -= 2.0 * np.pi
+    while angle < -np.pi:
+        angle += 2.0 * np.pi
+    return angle
 
+def stanley_steering(x, y, yaw, v, waypoints, k=2.0, ks=0.1, max_steer=np.radians(30)):
+    """
+    Improved Stanley steering controller.
+    
     Args:
         x, y     : rear axle position of the car
         yaw      : vehicle heading angle (in radians)
         v        : vehicle speed
         waypoints: Nx2 array of path waypoints
         k        : cross-track gain
-        ks       : softening term to prevent div by zero
+        ks       : softening term to prevent division by zero
         max_steer: steering angle limits (in radians)
 
     Returns:
         steer       : steering angle in radians
         target_idx  : index of the nearest waypoint
     """
-    # Step 1: Compute front axle position
-    L = 2.5  # assume fixed wheelbase
-    fx = x + L * np.cos(yaw)
-    fy = y + L * np.sin(yaw)
-
-    # Step 2: Find nearest waypoint
-    
-    dists = np.linalg.norm(waypoints - np.array([fx, fy]), axis=1)
+    # Step 1: Find nearest waypoint to rear axle
+    dists = np.linalg.norm(waypoints - np.array([x, y]), axis=1)
     target_idx = np.argmin(dists)
 
-    # Step 3: Compute heading of path at that point
-    if 0<target_idx<len(waypoints):
-        points_diff = (waypoints[target_idx-1]-waypoints[target_idx+1])
-    elif target_idx==0:
-        points_diff = (waypoints[0]-waypoints[1])
+    # Step 2: Compute heading of path at the target point
+    if 0 < target_idx < len(waypoints) - 1:
+        dx, dy = waypoints[target_idx + 1] - waypoints[target_idx - 1]
+    elif target_idx == 0:
+        dx, dy = waypoints[1] - waypoints[0]
     else:
-        points_diff = (waypoints[target_idx-1]-waypoints[target_idx])
-    
-    heading= np.arctan2(points_diff[1], points_diff[0])
-    
-    # Step 4: Compute heading error
-    yaw_error= heading - yaw
+        dx, dy = waypoints[-1] - waypoints[-2]
+    path_heading = np.arctan2(dy, dx)
 
-    # Step 5: Compute signed cross-track error
-    sign_check= yaw < np.arctan2((waypoints[target_idx][1]-y),(waypoints[target_idx][0]-x))
-    e= dists[target_idx] if sign_check else -dists[target_idx]
+    # Step 3: Compute heading error
+    yaw_error = normalize_angle(path_heading - yaw)
 
-    # Step 6: Compute steering using Stanley law
-    steer = yaw_error + np.arctan(k*e/(v+ks))
+    # Step 4: Compute cross-track error
+    map_x, map_y = waypoints[target_idx]
+    dx = map_x - x
+    dy = map_y - y
+
+    # Perpendicular projection to determine side of the path
+    heading_vector = [np.cos(yaw), np.sin(yaw)]
+    error_vector = [dx, dy]
+    cross = np.cross(heading_vector, error_vector)
+    e = np.linalg.norm([dx, dy])
+    if cross < 0:
+        e *= -1  # Negative if on the right side
+
+    # Step 5: Stanley control law
+    steer = yaw_error + np.arctan2(k * e, v + ks)
     steer = np.clip(steer, -max_steer, max_steer)
 
     return steer, target_idx
